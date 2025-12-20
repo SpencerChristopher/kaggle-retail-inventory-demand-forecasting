@@ -279,7 +279,7 @@ def load_and_clean_ppp_data(ppp_file_path, logger):
         # Step 2: Manually set the header from the first row and clean up
         df_ppp.columns = df_ppp.iloc[0]
         logger.info(f"Step 2 - After setting header from first row, columns: {df_ppp.columns.tolist()}")
-        
+
         df_ppp = df_ppp.drop(df_ppp.index[0]).reset_index(drop=True);
 
         # Step 3: Clean the column names themselves
@@ -292,11 +292,17 @@ def load_and_clean_ppp_data(ppp_file_path, logger):
         # Step 4: Select only the required columns and apply city name cleaning
         if 'city' in df_ppp.columns and 'ppp_multiplier' in df_ppp.columns:
             df_ppp = df_ppp[['city', 'ppp_multiplier']]
-            logger.info(f"Successfully parsed PPP data: {len(df_ppp)} rows.")
             
+            # Convert ppp_multiplier to a numeric type, coercing errors
+            df_ppp['ppp_multiplier'] = pd.to_numeric(df_ppp['ppp_multiplier'], errors='coerce')
+            logger.info(f"Converted 'ppp_multiplier' to numeric. Dtype is now: {df_ppp['ppp_multiplier'].dtype}")
+
+            logger.info(f"Successfully parsed PPP data: {len(df_ppp)} rows.")
+
             # Apply the city name cleaning to a new column for merging
             df_ppp['city_clean'] = df_ppp['city'].apply(clean_ppp_city_name)
-            logger.info(f"Cleaned PPP city names. Example: '{df_ppp['city'].iloc[0]}' -> '{df_ppp['city_clean'].iloc[0]}'")
+            logger.info(
+                f"Cleaned PPP city names. Example: '{df_ppp['city'].iloc[0]}' -> '{df_ppp['city_clean'].iloc[0]}'")
         else:
             logger.error("Required columns ('city', 'ppp_multiplier') not found after cleaning.")
             df_ppp = pd.DataFrame()  # Return empty if columns are wrong
@@ -336,50 +342,10 @@ except Exception as e:
 
 
 # %% [code] {"jupyter":{"outputs_hidden":false},"execution":{"iopub.status.busy":"2025-12-19T19:32:53.357234Z","iopub.execute_input":"2025-12-19T19:32:53.357949Z","iopub.status.idle":"2025-12-19T19:32:53.373088Z","shell.execute_reply.started":"2025-12-19T19:32:53.357925Z","shell.execute_reply":"2025-12-19T19:32:53.372235Z"}}
-# Function to calculate V2 City Opportunity Score
-def calculate_v2_city_opportunity_score(df_input, config, logger):
-    logger.info("--- Starting calculate_v2_city_opportunity_score Function ---")
-    location_summary_sorted_v2 = pd.DataFrame()  # Initialize in case of early exit
-    df_entry_level_v2 = pd.DataFrame()  # Initialize
-
-    if 'df_input' in locals() and not df_input.empty and 'location_final' in df_input.columns:
-        ENTRY_LEVEL_THRESHOLD = 2  # Assuming config['ENTRY_LEVEL_THRESHOLD'] is not yet implemented
-        MIN_JOB_COUNT = 3  # Assuming config['MIN_JOB_COUNT'] is not yet implemented
-        weights = {'count': 0.5, 'salary': 0.5}  # Assuming config['V2_WEIGHTS'] is not yet implemented
-
-        df_entry_level_v2 = df_input[df_input['experience_required'] <= ENTRY_LEVEL_THRESHOLD].copy()
-
-        location_summary_v2 = df_entry_level_v2.groupby('location_final').agg(
-            job_count=('location_final', 'size'),
-            avg_salary=('salary_avg', 'mean')
-        ).reset_index()
-        location_summary_v2 = location_summary_v2[location_summary_v2['job_count'] >= MIN_JOB_COUNT]
-
-        if not location_summary_v2.empty:
-            scaler_v2 = MinMaxScaler()
-            location_summary_v2[['normalized_count', 'normalized_salary']] = scaler_v2.fit_transform(
-                location_summary_v2[['job_count', 'avg_salary']]
-            )
-            location_summary_v2['opportunity_score'] = (
-                    location_summary_v2['normalized_count'] * weights['count'] +
-                    location_summary_v2['normalized_salary'] * weights['salary']
-            )
-            location_summary_sorted_v2 = location_summary_v2.sort_values(by='opportunity_score', ascending=False)
-            logger.info("Top 10 Cities by V2 Opportunity Score (from function):")
-            logger.info(f"\n{location_summary_sorted_v2.head(10).to_string()}")
-        else:
-            logger.warning("No data available for V2 score after filtering by MIN_JOB_COUNT.")
-    else:
-        logger.warning(
-            "Input DataFrame not found or is empty, or 'location_final' column is missing for V2 score calculation.")
-
-    logger.info("--- Finished calculate_v2_city_opportunity_score Function ---")
-    return location_summary_sorted_v2, df_entry_level_v2
-
-
 # Function to calculate V3 City Opportunity Score (PPP Adjusted)
 def calculate_v3_city_opportunity_score(df_input, df_ppp_input, config, logger):
     logger.info("--- Starting calculate_v3_city_opportunity_score Function ---")
+    logger.info(f"Columns available in df_input at function start: {df_input.columns.tolist()}")
     location_summary_sorted_v3 = pd.DataFrame()  # Initialize
     df_entry_level_v3 = pd.DataFrame()  # Initialize
 
@@ -389,11 +355,32 @@ def calculate_v3_city_opportunity_score(df_input, df_ppp_input, config, logger):
         weights = config.get('V2_WEIGHTS', {'count': 0.5, 'salary': 0.5})  # Will be V3_WEIGHTS later
 
         df_entry_level_v3 = df_input[df_input['experience_required'] <= ENTRY_LEVEL_THRESHOLD].copy()
+        
+        # --- Start of Enhanced Data Integrity Logging ---
+        logger.info(f"Columns in df_entry_level_v3: {df_entry_level_v3.columns.tolist()}")
+        
+        # Log DataFrame info (dtypes, non-null counts)
+        import io
+        buffer = io.StringIO()
+        df_entry_level_v3.info(buf=buffer)
+        info_str = buffer.getvalue()
+        logger.info(f"Data integrity check for df_entry_level_v3:\n{info_str}")
 
-        logger.debug(f"Columns of df_entry_level_v3 before groupby: {df_entry_level_v3.columns.tolist()}")
+        # Log descriptive statistics for key columns
+        if 'salary_avg' in df_entry_level_v3.columns:
+            logger.info(f"Statistics for 'salary_avg':\n{df_entry_level_v3['salary_avg'].describe()}")
+        else:
+            logger.warning("'salary_avg' column not found for describe().")
+            
+        if 'experience_required' in df_entry_level_v3.columns:
+            logger.info(f"Statistics for 'experience_required':\n{df_entry_level_v3['experience_required'].describe()}")
+        else:
+            logger.warning("'experience_required' column not found for describe().")
+        # --- End of Enhanced Data Integrity Logging ---
+
         location_summary_v3 = df_entry_level_v3.groupby('location_final').agg(
             job_count=('location_final', 'size'),
-            avg_salary=('avg_salary', 'mean')  # Note: using avg_salary, not yet adjusted
+            avg_salary=('salary_avg', 'mean')
         ).reset_index()
         location_summary_v3 = location_summary_v3[location_summary_v3['job_count'] >= MIN_JOB_COUNT]
 
@@ -534,18 +521,18 @@ except Exception as e:
 
 # %% [code] {"jupyter":{"outputs_hidden":false},"execution":{"iopub.status.busy":"2025-12-19T19:32:53.460765Z","iopub.execute_input":"2025-12-19T19:32:53.461081Z","iopub.status.idle":"2025-12-19T19:32:53.476664Z","shell.execute_reply.started":"2025-12-19T19:32:53.461060Z","shell.execute_reply":"2025-12-19T19:32:53.475800Z"}}
 # Function to analyze "Must-Have" Skills
-def analyze_must_have_skills(df_input, location_summary_sorted_v2, df_entry_level_v2, logger):
+def analyze_must_have_skills(df_input, location_summary_sorted_v3, df_entry_level_v3, logger):
     logger.info("--- Starting analyze_must_have_skills Function ---")
     top_10_skills = pd.Series()  # Initialize with empty Series
     try:
-        if not location_summary_sorted_v2.empty and not df_entry_level_v2.empty:
+        if not location_summary_sorted_v3.empty and not df_entry_level_v3.empty:
             # 1. Get Top 5 Cities
-            top_cities_list = location_summary_sorted_v2.head(5)['location_final'].tolist()
+            top_cities_list = location_summary_sorted_v3.head(5)['location_final'].tolist()
             logger.info(f"Analyzing skills for Top 5 cities: {top_cities_list}")
 
             # 2. Filter for jobs in top cities
-            df_top_cities = df_entry_level_v2[
-                df_entry_level_v2['location_final'].isin(top_cities_list)].copy()  # Use .copy()
+            df_top_cities = df_entry_level_v3[
+                df_entry_level_v3['location_final'].isin(top_cities_list)].copy()  # Use .copy()
             logger.info(f"Found {len(df_top_cities)} entry-level jobs in the top 5 cities.")
 
             # 3. Aggregate all skills
@@ -595,38 +582,6 @@ except Exception as e:
 
 
 # %% [code] {"jupyter":{"outputs_hidden":false},"execution":{"iopub.status.busy":"2025-12-19T19:32:53.509457Z","iopub.execute_input":"2025-12-19T19:32:53.509808Z","iopub.status.idle":"2025-12-19T19:32:53.536823Z","shell.execute_reply.started":"2025-12-19T19:32:53.509783Z","shell.execute_reply":"2025-12-19T19:32:53.535799Z"}}
-# Function to visualize "Must-Have" Skills
-def visualize_must_have_skills(top_10_skills, output_path, logger):
-    logger.info("--- Starting visualize_must_have_skills Function ---")
-    try:
-        if top_10_skills is not None and not top_10_skills.empty:
-            import matplotlib.pyplot as plt
-            import seaborn as sns
-            plt.style.use('seaborn-v0_8-whitegrid')
-            fig, ax = plt.subplots(figsize=(12, 8))
-            sns.barplot(
-                x=top_10_skills.values,
-                y=top_10_skills.index,
-                palette='magma',
-                ax=ax
-            )
-            ax.set_title('Top 10 "Must-Have" Skills in Top Cities (Entry-Level)', fontsize=16, weight='bold')
-            ax.set_xlabel('Number of Job Postings', fontsize=12)
-            ax.set_ylabel('Skill', fontsize=12)
-            for container in ax.containers:
-                ax.bar_label(container, fmt='%d', fontsize=10, padding=3)
-            plt.tight_layout()
-            plt.savefig(output_path)
-            plt.close()
-            logger.info(f"Successfully saved 'Must-Have' Skills chart to '{output_path}'.")
-        else:
-            logger.warning("Top 10 skills data not available. Skipping visualization in function.")
-    except Exception as e:
-        logger.error(f"An error occurred during skills visualization function: {e}", exc_info=True)
-    logger.info("--- Finished visualize_must_have_skills Function ---")
-
-
-# %% [code] {"jupyter":{"outputs_hidden":false},"execution":{"iopub.status.busy":"2025-12-19T19:32:53.537858Z","iopub.execute_input":"2025-12-19T19:32:53.538187Z","iopub.status.idle":"2025-12-19T19:32:53.562666Z","shell.execute_reply.started":"2025-12-19T19:32:53.538153Z","shell.execute_reply":"2025-12-19T19:32:53.561196Z"}}
 # Function to visualize "Must-Have" Skills
 def visualize_must_have_skills(top_10_skills, output_path, logger):
     logger.info("--- Starting visualize_must_have_skills Function ---")
